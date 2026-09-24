@@ -35,10 +35,10 @@ func main() {
 		fileserverHits: atomic.Int32{},
 	}
 	mux.Handle("/app/", cfg.middlewareMetricsInc(http.StripPrefix("/app/", http.FileServer(http.Dir(".")))))
-	mux.HandleFunc("/metrics", cfg.getFileserverHits)
-	mux.HandleFunc("/reset", cfg.resetFileserverHits)
+	mux.HandleFunc("GET /metrics", cfg.getFileserverHits)
+	mux.HandleFunc("POST /reset", cfg.resetFileserverHits)
 
-	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("OK"))
