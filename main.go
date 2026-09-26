@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -15,6 +16,26 @@ import (
 
 type server struct {
 	fileserverHits atomic.Int32
+}
+
+type chirpValidationRequest struct {
+	Body string `json:"body"`
+}
+
+type chirpValidationResponse struct {
+	Valid bool `json:"valid"`
+}
+
+type chirpValidationErrorResponse struct {
+	Err string `json:"error"`
+}
+
+func writeJSONResponse(w http.ResponseWriter, response any) {
+	encoder := json.NewEncoder(w)
+
+	if err := encoder.Encode(response); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
 }
 
 func (s *server) HandleFiles(prefix string) http.Handler {
@@ -58,6 +79,35 @@ func (s *server) HandleMetrics(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, template, currentHits)
 }
 
+func (s *server) HandleChirpValidation(w http.ResponseWriter, r *http.Request) {
+	var chirpReq chirpValidationRequest
+
+	defer r.Body.Close()
+
+	w.Header().Set("Content-Type", "application/json")
+
+	err := json.NewDecoder(r.Body).Decode(&chirpReq)
+
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		writeJSONResponse(w, chirpValidationErrorResponse{
+			Err: "Something went wrong",
+		})
+		return
+	}
+
+	if len(chirpReq.Body) > 140 {
+		w.WriteHeader(http.StatusBadRequest)
+		writeJSONResponse(w, chirpValidationErrorResponse{
+			Err: "Chirp is too long",
+		})
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	writeJSONResponse(w, chirpValidationResponse{Valid: true})
+}
+
 func main() {
 	mux := http.NewServeMux()
 	server := &server{
@@ -67,9 +117,11 @@ func main() {
 	appRoot := "/app/"
 
 	mux.Handle(appRoot, server.HandleFiles(appRoot))
-	mux.HandleFunc("GET /api/healthz", server.HandleHealthCheck)
 	mux.HandleFunc("GET /admin/metrics", server.HandleMetrics)
 	mux.HandleFunc("POST /admin/reset", server.HandleReset)
+
+	mux.HandleFunc("GET /api/healthz", server.HandleHealthCheck)
+	mux.HandleFunc("POST /api/validate_chirp", server.HandleChirpValidation)
 
 	port := ":8080"
 
