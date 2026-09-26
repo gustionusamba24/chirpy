@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"slices"
+	"strings"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -23,7 +25,7 @@ type chirpValidationRequest struct {
 }
 
 type chirpValidationResponse struct {
-	Valid bool `json:"valid"`
+	CleanedBody string `json:"cleaned_body"`
 }
 
 type chirpValidationErrorResponse struct {
@@ -80,6 +82,12 @@ func (s *server) HandleMetrics(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) HandleChirpValidation(w http.ResponseWriter, r *http.Request) {
+	blacklist := []string{
+		"kerfuffle",
+		"sharbert",
+		"fornax",
+	}
+
 	var chirpReq chirpValidationRequest
 
 	defer r.Body.Close()
@@ -104,8 +112,22 @@ func (s *server) HandleChirpValidation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	words := strings.Split(chirpReq.Body, " ")
+	sanitized := []string{}
+
+	for _, word := range words {
+		if slices.Contains(blacklist, strings.ToLower(word)) {
+			sanitized = append(sanitized, "****")
+			continue
+		}
+
+		sanitized = append(sanitized, word)
+	}
+
+	cleanedBody := strings.Join(sanitized, " ")
+
 	w.WriteHeader(http.StatusOK)
-	writeJSONResponse(w, chirpValidationResponse{Valid: true})
+	writeJSONResponse(w, chirpValidationResponse{CleanedBody: cleanedBody})
 }
 
 func main() {
