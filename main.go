@@ -13,50 +13,57 @@ import (
 	"time"
 )
 
-type apiConfig struct {
+type server struct {
 	fileserverHits atomic.Int32
 }
 
-func (cfg *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
+func (s *server) HandleFiles(prefix string) http.Handler {
+	fileServer := http.StripPrefix(prefix, http.FileServer(http.Dir(".")))
+
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		cfg.fileserverHits.Add(1)
-		next.ServeHTTP(w, r)
+		s.fileserverHits.Add(1)
+		fileServer.ServeHTTP(w, r)
 	})
 }
 
-func (cfg *apiConfig) getFileserverHits(w http.ResponseWriter, r *http.Request) {
-	currentHits := cfg.fileserverHits.Load()
-
-	w.Write([]byte(fmt.Sprintf("Hits: %d", int32(currentHits))))
+func (s *server) HandleHealthCheck(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte("OK"))
 }
 
-func (cfg *apiConfig) resetFileserverHits(w http.ResponseWriter, r *http.Request) {
-	cfg.fileserverHits.Store(0)
+func (s *server) HandleReset(w http.ResponseWriter, r *http.Request) {
+	s.fileserverHits.Store(0)
+
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte("OK"))
+}
+
+func (s *server) HandleMetrics(w http.ResponseWriter, r *http.Request) {
+	currentHits := s.fileserverHits.Load()
+
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	fmt.Fprintf(w, "Hits: %d", currentHits)
 }
 
 func main() {
 	mux := http.NewServeMux()
-
-	cfg := &apiConfig{
+	server := &server{
 		fileserverHits: atomic.Int32{},
 	}
 
 	appRoot := "/app/"
 
-	mux.Handle(appRoot, cfg.middlewareMetricsInc(http.StripPrefix(appRoot, http.FileServer(http.Dir(".")))))
-	mux.HandleFunc("GET /metrics", cfg.getFileserverHits)
-	mux.HandleFunc("POST /reset", cfg.resetFileserverHits)
-
-	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
-		time.Sleep(60 * time.Second)
-		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("OK"))
-	})
+	mux.Handle(appRoot, server.HandleFiles(appRoot))
+	mux.HandleFunc("GET /healthz", server.HandleHealthCheck)
+	mux.HandleFunc("GET /metrics", server.HandleMetrics)
+	mux.HandleFunc("POST /reset", server.HandleReset)
 
 	port := ":8080"
 
-	svr := &http.Server{
+	httpServer := &http.Server{
 		Addr:    port,
 		Handler: mux,
 	}
@@ -68,7 +75,7 @@ func main() {
 		// after Shutdown or Close, the returned error is http.ErrServerClosed
 		// program execution will stop at that line
 		// the subsequent code will not be executed until the server is shutdown
-		err := svr.ListenAndServe()
+		err := httpServer.ListenAndServe()
 
 		if !errors.Is(err, http.ErrServerClosed) {
 			log.Fatalf("HTTP Server error: %v", err)
@@ -85,7 +92,7 @@ func main() {
 	shutdownCtx, shutdownRelease := context.WithTimeout(context.Background(), 10*time.Second)
 	defer shutdownRelease()
 
-	if err := svr.Shutdown(shutdownCtx); err != nil {
+	if err := httpServer.Shutdown(shutdownCtx); err != nil {
 		log.Fatalf("HTTP shutdown error: %v", err)
 	}
 
