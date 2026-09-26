@@ -43,9 +43,19 @@ func (s *server) HandleReset(w http.ResponseWriter, r *http.Request) {
 func (s *server) HandleMetrics(w http.ResponseWriter, r *http.Request) {
 	currentHits := s.fileserverHits.Load()
 
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
-	fmt.Fprintf(w, "Hits: %d", currentHits)
+
+	template := `
+	<html>
+		<body>
+			<h1>Welcome, Chirpy Admin</h1>
+			<p>Chirpy has been visited %d times!</p>
+		</body>
+	</html>
+	`
+
+	fmt.Fprintf(w, template, currentHits)
 }
 
 func main() {
@@ -57,9 +67,9 @@ func main() {
 	appRoot := "/app/"
 
 	mux.Handle(appRoot, server.HandleFiles(appRoot))
-	mux.HandleFunc("GET /healthz", server.HandleHealthCheck)
-	mux.HandleFunc("GET /metrics", server.HandleMetrics)
-	mux.HandleFunc("POST /reset", server.HandleReset)
+	mux.HandleFunc("GET /api/healthz", server.HandleHealthCheck)
+	mux.HandleFunc("GET /admin/metrics", server.HandleMetrics)
+	mux.HandleFunc("POST /admin/reset", server.HandleReset)
 
 	port := ":8080"
 
