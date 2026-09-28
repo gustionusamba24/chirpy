@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,22 +15,16 @@ import (
 	"sync/atomic"
 	"syscall"
 	"time"
+
+	"github.com/gustionusamba24/chirpy/internal/database"
+	"github.com/joho/godotenv"
+	_ "github.com/lib/pq"
 )
 
 type server struct {
 	fileserverHits atomic.Int32
-}
-
-type chirpValidationRequest struct {
-	Body string `json:"body"`
-}
-
-type chirpValidationResponse struct {
-	CleanedBody string `json:"cleaned_body"`
-}
-
-type chirpValidationErrorResponse struct {
-	Err string `json:"error"`
+	database       *database.Queries
+	platform       string
 }
 
 func writeJSONResponse(w http.ResponseWriter, response any) {
@@ -56,7 +51,14 @@ func (s *server) HandleHealthCheck(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) HandleReset(w http.ResponseWriter, r *http.Request) {
+	if s.platform != "dev" {
+		w.WriteHeader(http.StatusForbidden)
+		return
+	}
+
 	s.fileserverHits.Store(0)
+
+	s.database.DeleteAllUsers(r.Context())
 
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
@@ -81,6 +83,18 @@ func (s *server) HandleMetrics(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, template, currentHits)
 }
 
+type chirpValidationRequest struct {
+	Body string `json:"body"`
+}
+
+type chirpValidationResponse struct {
+	CleanedBody string `json:"cleaned_body"`
+}
+
+type chirpValidationErrorResponse struct {
+	Err string `json:"error"`
+}
+
 func (s *server) HandleChirpValidation(w http.ResponseWriter, r *http.Request) {
 	blacklist := []string{
 		"kerfuffle",
@@ -99,7 +113,7 @@ func (s *server) HandleChirpValidation(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		w.WriteHeader(http.StatusBadRequest)
 		writeJSONResponse(w, chirpValidationErrorResponse{
-			Err: "Something went wrong",
+			Err: "Unable to deserialize JSON",
 		})
 		return
 	}
@@ -130,10 +144,81 @@ func (s *server) HandleChirpValidation(w http.ResponseWriter, r *http.Request) {
 	writeJSONResponse(w, chirpValidationResponse{CleanedBody: cleanedBody})
 }
 
+type createUserRequest struct {
+	Email string `json:"email"`
+}
+
+type createUserResponse struct {
+	Id        string `json:"id"`
+	CreatedAt string `json:"created_at"`
+	UpdatedAt string `json:"updated_at"`
+	Email     string `json:"email"`
+}
+
+func (s *server) HandleCreateUser(w http.ResponseWriter, r *http.Request) {
+	var createUserReq createUserRequest
+
+	defer r.Body.Close()
+
+	w.Header().Set("Content-Type", "application/json")
+
+	err := json.NewDecoder(r.Body).Decode(&createUserReq)
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		writeJSONResponse(w, chirpValidationErrorResponse{
+			Err: "Unable to deserialize JSON",
+		})
+		return
+	}
+
+	trimmedEmail := strings.TrimSpace(createUserReq.Email)
+
+	if trimmedEmail == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		writeJSONResponse(w, chirpValidationErrorResponse{
+			Err: "Email is required. It must be valid email address",
+		})
+		return
+	}
+
+	user, err := s.database.CreateUser(r.Context(), trimmedEmail)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		writeJSONResponse(w, chirpValidationErrorResponse{
+			Err: "Failed to create a user",
+		})
+		return
+	}
+
+	w.WriteHeader(http.StatusCreated)
+	writeJSONResponse(w, createUserResponse{
+		Id:        user.ID.String(),
+		CreatedAt: user.CreatedAt.Format(time.RFC3339),
+		UpdatedAt: user.UpdatedAt.Format(time.RFC3339),
+		Email:     user.Email,
+	})
+}
+
 func main() {
+	err := godotenv.Load()
+	if err != nil {
+		log.Fatalf("Failed to load environment variable")
+		os.Exit(1)
+	}
+
+	dbURL := os.Getenv("DB_URL")
+	platform := os.Getenv("PLATFORM")
+
+	db, err := sql.Open("postgres", dbURL)
+	if err != nil {
+		log.Fatalf("Failed to connect to database: %v", err)
+		os.Exit(1)
+	}
+
 	mux := http.NewServeMux()
 	server := &server{
-		fileserverHits: atomic.Int32{},
+		database: database.New(db),
+		platform: platform,
 	}
 
 	appRoot := "/app/"
@@ -144,6 +229,8 @@ func main() {
 
 	mux.HandleFunc("GET /api/healthz", server.HandleHealthCheck)
 	mux.HandleFunc("POST /api/validate_chirp", server.HandleChirpValidation)
+
+	mux.HandleFunc("POST /api/users", server.HandleCreateUser)
 
 	port := ":8080"
 

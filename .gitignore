@@ -4,3 +4,6 @@
 
 # Binary file
 bin/
+
+# Environtment Variable
+/*.env*
