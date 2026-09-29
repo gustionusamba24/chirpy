@@ -10,3 +10,11 @@ RETURNING *;
 
 -- name: DeleteAllUsers :exec
 DELETE FROM users;
+
+-- name: GetUserById :one
+SELECT id,
+       created_at,
+       updated_at,
+       email
+FROM users
+WHERE id = $1;

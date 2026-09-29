@@ -16,6 +16,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/gustionusamba24/chirpy/internal/database"
 	"github.com/joho/godotenv"
 	_ "github.com/lib/pq"
@@ -83,50 +84,81 @@ func (s *server) HandleMetrics(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, template, currentHits)
 }
 
-type chirpValidationRequest struct {
-	Body string `json:"body"`
-}
-
-type chirpValidationResponse struct {
-	CleanedBody string `json:"cleaned_body"`
-}
-
-type chirpValidationErrorResponse struct {
+type apiErrorResponse struct {
 	Err string `json:"error"`
 }
 
-func (s *server) HandleChirpValidation(w http.ResponseWriter, r *http.Request) {
+type createcreateChirpRequest struct {
+	Body   string `json:"body"`
+	UserId string `json:"user_id"`
+}
+
+type createChirpResponse struct {
+	Id        string `json:"id"`
+	CreatedAt string `json:"created_at"`
+	UpdatedAt string `json:"updated_at"`
+	Body      string `json:"body"`
+	UserId    string `json:"user_id"`
+}
+
+func (s *server) HandleCreateChirp(w http.ResponseWriter, r *http.Request) {
 	blacklist := []string{
 		"kerfuffle",
 		"sharbert",
 		"fornax",
 	}
 
-	var chirpReq chirpValidationRequest
+	var createChirpReq createcreateChirpRequest
 
 	defer r.Body.Close()
 
 	w.Header().Set("Content-Type", "application/json")
 
-	err := json.NewDecoder(r.Body).Decode(&chirpReq)
+	err := json.NewDecoder(r.Body).Decode(&createChirpReq)
 
 	if err != nil {
 		w.WriteHeader(http.StatusBadRequest)
-		writeJSONResponse(w, chirpValidationErrorResponse{
+		writeJSONResponse(w, apiErrorResponse{
 			Err: "Unable to deserialize JSON",
 		})
 		return
 	}
 
-	if len(chirpReq.Body) > 140 {
+	if len(createChirpReq.Body) > 140 {
 		w.WriteHeader(http.StatusBadRequest)
-		writeJSONResponse(w, chirpValidationErrorResponse{
+		writeJSONResponse(w, apiErrorResponse{
 			Err: "Chirp is too long",
 		})
 		return
 	}
 
-	words := strings.Split(chirpReq.Body, " ")
+	requestUserId, err := uuid.Parse(createChirpReq.UserId)
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		writeJSONResponse(w, apiErrorResponse{
+			Err: "Invalid user ID. User ID must be valid UUID",
+		})
+		return
+	}
+
+	existingUser, err := s.database.GetUserById(r.Context(), requestUserId)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			w.WriteHeader(http.StatusNotFound)
+			writeJSONResponse(w, apiErrorResponse{
+				Err: "User not found",
+			})
+			return
+		}
+
+		w.WriteHeader(http.StatusInternalServerError)
+		writeJSONResponse(w, apiErrorResponse{
+			Err: "Failed to retrieve user",
+		})
+		return
+	}
+
+	words := strings.Split(createChirpReq.Body, " ")
 	sanitized := []string{}
 
 	for _, word := range words {
@@ -140,8 +172,28 @@ func (s *server) HandleChirpValidation(w http.ResponseWriter, r *http.Request) {
 
 	cleanedBody := strings.Join(sanitized, " ")
 
-	w.WriteHeader(http.StatusOK)
-	writeJSONResponse(w, chirpValidationResponse{CleanedBody: cleanedBody})
+	createUserParams := database.CreateChirpParams{
+		Body:   cleanedBody,
+		UserID: existingUser.ID,
+	}
+
+	chirp, err := s.database.CreateChirp(r.Context(), createUserParams)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		writeJSONResponse(w, apiErrorResponse{
+			Err: "Failed to create a chirp",
+		})
+		return
+	}
+
+	w.WriteHeader(http.StatusCreated)
+	writeJSONResponse(w, createChirpResponse{
+		Id:        chirp.ID.String(),
+		CreatedAt: chirp.CreatedAt.Format(time.RFC3339),
+		UpdatedAt: chirp.UpdatedAt.Format(time.RFC3339),
+		Body:      chirp.Body,
+		UserId:    chirp.UserID.String(),
+	})
 }
 
 type createUserRequest struct {
@@ -165,7 +217,7 @@ func (s *server) HandleCreateUser(w http.ResponseWriter, r *http.Request) {
 	err := json.NewDecoder(r.Body).Decode(&createUserReq)
 	if err != nil {
 		w.WriteHeader(http.StatusBadRequest)
-		writeJSONResponse(w, chirpValidationErrorResponse{
+		writeJSONResponse(w, apiErrorResponse{
 			Err: "Unable to deserialize JSON",
 		})
 		return
@@ -175,7 +227,7 @@ func (s *server) HandleCreateUser(w http.ResponseWriter, r *http.Request) {
 
 	if trimmedEmail == "" {
 		w.WriteHeader(http.StatusBadRequest)
-		writeJSONResponse(w, chirpValidationErrorResponse{
+		writeJSONResponse(w, apiErrorResponse{
 			Err: "Email is required. It must be valid email address",
 		})
 		return
@@ -184,7 +236,7 @@ func (s *server) HandleCreateUser(w http.ResponseWriter, r *http.Request) {
 	user, err := s.database.CreateUser(r.Context(), trimmedEmail)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
-		writeJSONResponse(w, chirpValidationErrorResponse{
+		writeJSONResponse(w, apiErrorResponse{
 			Err: "Failed to create a user",
 		})
 		return
@@ -228,9 +280,10 @@ func main() {
 	mux.HandleFunc("POST /admin/reset", server.HandleReset)
 
 	mux.HandleFunc("GET /api/healthz", server.HandleHealthCheck)
-	mux.HandleFunc("POST /api/validate_chirp", server.HandleChirpValidation)
 
 	mux.HandleFunc("POST /api/users", server.HandleCreateUser)
+
+	mux.HandleFunc("POST /api/chirps", server.HandleCreateChirp)
 
 	port := ":8080"
 
