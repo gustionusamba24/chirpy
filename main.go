@@ -172,12 +172,12 @@ func (s *server) HandleCreateChirp(w http.ResponseWriter, r *http.Request) {
 
 	cleanedBody := strings.Join(sanitized, " ")
 
-	createUserParams := database.CreateChirpParams{
+	createUserchirpId := database.CreateChirpchirpId{
 		Body:   cleanedBody,
 		UserID: existingUser.ID,
 	}
 
-	chirp, err := s.database.CreateChirp(r.Context(), createUserParams)
+	chirp, err := s.database.CreateChirp(r.Context(), createUserchirpId)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		writeJSONResponse(w, apiErrorResponse{
@@ -277,6 +277,45 @@ func (s *server) HandleGetAllChirps(w http.ResponseWriter, r *http.Request) {
 	writeJSONResponse(w, chirpsResponse)
 }
 
+func (s *server) HandleGetChirp(w http.ResponseWriter, r *http.Request) {
+	chirpId := r.PathValue("id")
+
+	validChirdId, err := uuid.Parse(chirpId)
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		writeJSONResponse(w, apiErrorResponse{
+			Err: "Invalid chirp ID. Chirp ID must be valid UUID",
+		})
+		return
+	}
+
+	chirp, err := s.database.GetChirpByID(r.Context(), validChirdId)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			w.WriteHeader(http.StatusNotFound)
+			writeJSONResponse(w, apiErrorResponse{
+				Err: "No chirp found with the provided ID",
+			})
+			return
+		}
+
+		w.WriteHeader(http.StatusInternalServerError)
+		writeJSONResponse(w, apiErrorResponse{
+			Err: "Failed to retrieve chirp",
+		})
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	writeJSONResponse(w, chirpResponse{
+		Id:        chirp.ID.String(),
+		CreatedAt: chirp.CreatedAt.Format(time.RFC3339),
+		UpdatedAt: chirp.UpdatedAt.Format(time.RFC3339),
+		Body:      chirp.Body,
+		UserId:    chirp.UserID.String(),
+	})
+}
+
 func main() {
 	err := godotenv.Load()
 	if err != nil {
@@ -310,6 +349,7 @@ func main() {
 	mux.HandleFunc("POST /api/users", server.HandleCreateUser)
 
 	mux.HandleFunc("GET /api/chirps", server.HandleGetAllChirps)
+	mux.HandleFunc("GET /api/chirps/{id}", server.HandleGetChirp)
 	mux.HandleFunc("POST /api/chirps", server.HandleCreateChirp)
 
 	port := ":8080"
