@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/gustionusamba24/chirpy/internal/auth"
 	"github.com/gustionusamba24/chirpy/internal/database"
 	"github.com/joho/godotenv"
 	_ "github.com/lib/pq"
@@ -28,11 +29,25 @@ type server struct {
 	platform       string
 }
 
-func writeJSONResponse(w http.ResponseWriter, response any) {
+func encodeJsonResponse(w http.ResponseWriter, response any) {
 	encoder := json.NewEncoder(w)
 
 	if err := encoder.Encode(response); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
+}
+
+func decodeJsonRequest(w http.ResponseWriter, r *http.Request, data any) {
+	decoder := json.NewDecoder(r.Body)
+
+	defer r.Body.Close()
+
+	if err := decoder.Decode(data); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		encodeJsonResponse(w, apiErrorResponse{
+			Err: "Unable to deserialize JSON",
+		})
+		return
 	}
 }
 
@@ -88,7 +103,7 @@ type apiErrorResponse struct {
 	Err string `json:"error"`
 }
 
-type createcreateChirpRequest struct {
+type createChirpRequest struct {
 	Body   string `json:"body"`
 	UserId string `json:"user_id"`
 }
@@ -108,25 +123,15 @@ func (s *server) HandleCreateChirp(w http.ResponseWriter, r *http.Request) {
 		"fornax",
 	}
 
-	var createChirpReq createcreateChirpRequest
-
-	defer r.Body.Close()
+	var createChirpReq createChirpRequest
 
 	w.Header().Set("Content-Type", "application/json")
 
-	err := json.NewDecoder(r.Body).Decode(&createChirpReq)
-
-	if err != nil {
-		w.WriteHeader(http.StatusBadRequest)
-		writeJSONResponse(w, apiErrorResponse{
-			Err: "Unable to deserialize JSON",
-		})
-		return
-	}
+	decodeJsonRequest(w, r, &createChirpReq)
 
 	if len(createChirpReq.Body) > 140 {
 		w.WriteHeader(http.StatusBadRequest)
-		writeJSONResponse(w, apiErrorResponse{
+		encodeJsonResponse(w, apiErrorResponse{
 			Err: "Chirp is too long",
 		})
 		return
@@ -135,7 +140,7 @@ func (s *server) HandleCreateChirp(w http.ResponseWriter, r *http.Request) {
 	requestUserId, err := uuid.Parse(createChirpReq.UserId)
 	if err != nil {
 		w.WriteHeader(http.StatusBadRequest)
-		writeJSONResponse(w, apiErrorResponse{
+		encodeJsonResponse(w, apiErrorResponse{
 			Err: "Invalid user ID. User ID must be valid UUID",
 		})
 		return
@@ -145,14 +150,14 @@ func (s *server) HandleCreateChirp(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			w.WriteHeader(http.StatusNotFound)
-			writeJSONResponse(w, apiErrorResponse{
+			encodeJsonResponse(w, apiErrorResponse{
 				Err: "User not found",
 			})
 			return
 		}
 
 		w.WriteHeader(http.StatusInternalServerError)
-		writeJSONResponse(w, apiErrorResponse{
+		encodeJsonResponse(w, apiErrorResponse{
 			Err: "Failed to retrieve user",
 		})
 		return
@@ -172,22 +177,22 @@ func (s *server) HandleCreateChirp(w http.ResponseWriter, r *http.Request) {
 
 	cleanedBody := strings.Join(sanitized, " ")
 
-	createUserchirpId := database.CreateChirpchirpId{
+	createChirpParams := database.CreateChirpParams{
 		Body:   cleanedBody,
 		UserID: existingUser.ID,
 	}
 
-	chirp, err := s.database.CreateChirp(r.Context(), createUserchirpId)
+	chirp, err := s.database.CreateChirp(r.Context(), createChirpParams)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
-		writeJSONResponse(w, apiErrorResponse{
+		encodeJsonResponse(w, apiErrorResponse{
 			Err: "Failed to create a chirp",
 		})
 		return
 	}
 
 	w.WriteHeader(http.StatusCreated)
-	writeJSONResponse(w, chirpResponse{
+	encodeJsonResponse(w, chirpResponse{
 		Id:        chirp.ID.String(),
 		CreatedAt: chirp.CreatedAt.Format(time.RFC3339),
 		UpdatedAt: chirp.UpdatedAt.Format(time.RFC3339),
@@ -197,7 +202,8 @@ func (s *server) HandleCreateChirp(w http.ResponseWriter, r *http.Request) {
 }
 
 type createUserRequest struct {
-	Email string `json:"email"`
+	Email    string `json:"email"`
+	Password string `json:"password"`
 }
 
 type createUserResponse struct {
@@ -210,40 +216,55 @@ type createUserResponse struct {
 func (s *server) HandleCreateUser(w http.ResponseWriter, r *http.Request) {
 	var createUserReq createUserRequest
 
-	defer r.Body.Close()
-
 	w.Header().Set("Content-Type", "application/json")
 
-	err := json.NewDecoder(r.Body).Decode(&createUserReq)
-	if err != nil {
-		w.WriteHeader(http.StatusBadRequest)
-		writeJSONResponse(w, apiErrorResponse{
-			Err: "Unable to deserialize JSON",
-		})
-		return
-	}
+	decodeJsonRequest(w, r, &createUserReq)
 
 	trimmedEmail := strings.TrimSpace(createUserReq.Email)
 
 	if trimmedEmail == "" {
 		w.WriteHeader(http.StatusBadRequest)
-		writeJSONResponse(w, apiErrorResponse{
+		encodeJsonResponse(w, apiErrorResponse{
 			Err: "Email is required. It must be valid email address",
 		})
 		return
 	}
 
-	user, err := s.database.CreateUser(r.Context(), trimmedEmail)
+	trimmedPassword := strings.TrimSpace(createUserReq.Password)
+
+	if trimmedPassword == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		encodeJsonResponse(w, apiErrorResponse{
+			Err: "Password is required. It must be a non-empty password",
+		})
+		return
+	}
+
+	hashedPassword, err := auth.HashPassword(trimmedPassword)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
-		writeJSONResponse(w, apiErrorResponse{
+		encodeJsonResponse(w, apiErrorResponse{
+			Err: "Failed to hash password",
+		})
+		return
+	}
+
+	createUserParams := database.CreateUserParams{
+		Email:          trimmedEmail,
+		HashedPassword: hashedPassword,
+	}
+
+	user, err := s.database.CreateUser(r.Context(), createUserParams)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		encodeJsonResponse(w, apiErrorResponse{
 			Err: "Failed to create a user",
 		})
 		return
 	}
 
 	w.WriteHeader(http.StatusCreated)
-	writeJSONResponse(w, createUserResponse{
+	encodeJsonResponse(w, createUserResponse{
 		Id:        user.ID.String(),
 		CreatedAt: user.CreatedAt.Format(time.RFC3339),
 		UpdatedAt: user.UpdatedAt.Format(time.RFC3339),
@@ -255,7 +276,7 @@ func (s *server) HandleGetAllChirps(w http.ResponseWriter, r *http.Request) {
 	chirps, err := s.database.GetAllChirps(r.Context())
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
-		writeJSONResponse(w, apiErrorResponse{
+		encodeJsonResponse(w, apiErrorResponse{
 			Err: "Failed to get all chirps",
 		})
 		return
@@ -274,7 +295,7 @@ func (s *server) HandleGetAllChirps(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusOK)
-	writeJSONResponse(w, chirpsResponse)
+	encodeJsonResponse(w, chirpsResponse)
 }
 
 func (s *server) HandleGetChirp(w http.ResponseWriter, r *http.Request) {
@@ -283,7 +304,7 @@ func (s *server) HandleGetChirp(w http.ResponseWriter, r *http.Request) {
 	validChirdId, err := uuid.Parse(chirpId)
 	if err != nil {
 		w.WriteHeader(http.StatusBadRequest)
-		writeJSONResponse(w, apiErrorResponse{
+		encodeJsonResponse(w, apiErrorResponse{
 			Err: "Invalid chirp ID. Chirp ID must be valid UUID",
 		})
 		return
@@ -293,26 +314,88 @@ func (s *server) HandleGetChirp(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			w.WriteHeader(http.StatusNotFound)
-			writeJSONResponse(w, apiErrorResponse{
+			encodeJsonResponse(w, apiErrorResponse{
 				Err: "No chirp found with the provided ID",
 			})
 			return
 		}
 
 		w.WriteHeader(http.StatusInternalServerError)
-		writeJSONResponse(w, apiErrorResponse{
+		encodeJsonResponse(w, apiErrorResponse{
 			Err: "Failed to retrieve chirp",
 		})
 		return
 	}
 
 	w.WriteHeader(http.StatusOK)
-	writeJSONResponse(w, chirpResponse{
+	encodeJsonResponse(w, chirpResponse{
 		Id:        chirp.ID.String(),
 		CreatedAt: chirp.CreatedAt.Format(time.RFC3339),
 		UpdatedAt: chirp.UpdatedAt.Format(time.RFC3339),
 		Body:      chirp.Body,
 		UserId:    chirp.UserID.String(),
+	})
+}
+
+type loginRequest struct {
+	Email    string `json:"email"`
+	Password string `json:"password"`
+}
+
+type loginResponse struct {
+	Id        string `json:"id"`
+	CreatedAt string `json:"created_at"`
+	UpdatedAt string `json:"updated_at"`
+	Email     string `json:"email"`
+}
+
+func (s *server) HandleLogin(w http.ResponseWriter, r *http.Request) {
+	var loginReq loginRequest
+
+	w.Header().Set("Content-Type", "application/json")
+
+	decodeJsonRequest(w, r, &loginReq)
+
+	existingUser, err := s.database.GetUserByEmail(r.Context(), loginReq.Email)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			w.WriteHeader(http.StatusUnauthorized)
+			encodeJsonResponse(w, apiErrorResponse{
+				Err: "Invalid email or password",
+			})
+			return
+		}
+
+		w.WriteHeader(http.StatusInternalServerError)
+		encodeJsonResponse(w, apiErrorResponse{
+			Err: "Failed to retrieve user",
+		})
+		return
+	}
+
+	match, err := auth.CheckPasswordHash(loginReq.Password, existingUser.HashedPassword)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		encodeJsonResponse(w, apiErrorResponse{
+			Err: "Failed to check password",
+		})
+		return
+	}
+
+	if !match {
+		w.WriteHeader(http.StatusUnauthorized)
+		encodeJsonResponse(w, apiErrorResponse{
+			Err: "Incorrect email or password",
+		})
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	encodeJsonResponse(w, loginResponse{
+		Id:        existingUser.ID.String(),
+		CreatedAt: existingUser.CreatedAt.Format(time.RFC3339),
+		UpdatedAt: existingUser.UpdatedAt.Format(time.RFC3339),
+		Email:     existingUser.Email,
 	})
 }
 
@@ -346,6 +429,7 @@ func main() {
 
 	mux.HandleFunc("GET /api/healthz", server.HandleHealthCheck)
 
+	mux.HandleFunc("POST /api/login", server.HandleLogin)
 	mux.HandleFunc("POST /api/users", server.HandleCreateUser)
 
 	mux.HandleFunc("GET /api/chirps", server.HandleGetAllChirps)
