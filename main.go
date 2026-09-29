@@ -37,18 +37,22 @@ func encodeJsonResponse(w http.ResponseWriter, response any) {
 	}
 }
 
-func decodeJsonRequest(w http.ResponseWriter, r *http.Request, data any) {
+func decodeJsonRequest[T any](w http.ResponseWriter, r *http.Request) *T {
+	var data *T
+
 	decoder := json.NewDecoder(r.Body)
 
 	defer r.Body.Close()
 
-	if err := decoder.Decode(data); err != nil {
+	if err := decoder.Decode(&data); err != nil {
 		w.WriteHeader(http.StatusBadRequest)
 		encodeJsonResponse(w, apiErrorResponse{
 			Err: "Unable to deserialize JSON",
 		})
-		return
+		return nil
 	}
+
+	return data
 }
 
 func (s *server) HandleFiles(prefix string) http.Handler {
@@ -123,11 +127,9 @@ func (s *server) HandleCreateChirp(w http.ResponseWriter, r *http.Request) {
 		"fornax",
 	}
 
-	var createChirpReq createChirpRequest
-
 	w.Header().Set("Content-Type", "application/json")
 
-	decodeJsonRequest(w, r, &createChirpReq)
+	createChirpReq := decodeJsonRequest[createChirpRequest](w, r)
 
 	if len(createChirpReq.Body) > 140 {
 		w.WriteHeader(http.StatusBadRequest)
@@ -214,11 +216,9 @@ type createUserResponse struct {
 }
 
 func (s *server) HandleCreateUser(w http.ResponseWriter, r *http.Request) {
-	var createUserReq createUserRequest
-
 	w.Header().Set("Content-Type", "application/json")
 
-	decodeJsonRequest(w, r, &createUserReq)
+	createUserReq := decodeJsonRequest[createUserRequest](w, r)
 
 	trimmedEmail := strings.TrimSpace(createUserReq.Email)
 
@@ -350,11 +350,9 @@ type loginResponse struct {
 }
 
 func (s *server) HandleLogin(w http.ResponseWriter, r *http.Request) {
-	var loginReq loginRequest
-
 	w.Header().Set("Content-Type", "application/json")
 
-	decodeJsonRequest(w, r, &loginReq)
+	loginReq := decodeJsonRequest[loginRequest](w, r)
 
 	existingUser, err := s.database.GetUserByEmail(r.Context(), loginReq.Email)
 	if err != nil {
