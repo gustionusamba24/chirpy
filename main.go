@@ -93,7 +93,7 @@ type createcreateChirpRequest struct {
 	UserId string `json:"user_id"`
 }
 
-type createChirpResponse struct {
+type chirpResponse struct {
 	Id        string `json:"id"`
 	CreatedAt string `json:"created_at"`
 	UpdatedAt string `json:"updated_at"`
@@ -187,7 +187,7 @@ func (s *server) HandleCreateChirp(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusCreated)
-	writeJSONResponse(w, createChirpResponse{
+	writeJSONResponse(w, chirpResponse{
 		Id:        chirp.ID.String(),
 		CreatedAt: chirp.CreatedAt.Format(time.RFC3339),
 		UpdatedAt: chirp.UpdatedAt.Format(time.RFC3339),
@@ -251,6 +251,32 @@ func (s *server) HandleCreateUser(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (s *server) HandleGetAllChirps(w http.ResponseWriter, r *http.Request) {
+	chirps, err := s.database.GetAllChirps(r.Context())
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		writeJSONResponse(w, apiErrorResponse{
+			Err: "Failed to get all chirps",
+		})
+		return
+	}
+
+	chirpsResponse := []chirpResponse{}
+
+	for _, chirp := range chirps {
+		chirpsResponse = append(chirpsResponse, chirpResponse{
+			Id:        chirp.ID.String(),
+			CreatedAt: chirp.CreatedAt.Format(time.RFC3339),
+			UpdatedAt: chirp.UpdatedAt.Format(time.RFC3339),
+			Body:      chirp.Body,
+			UserId:    chirp.UserID.String(),
+		})
+	}
+
+	w.WriteHeader(http.StatusOK)
+	writeJSONResponse(w, chirpsResponse)
+}
+
 func main() {
 	err := godotenv.Load()
 	if err != nil {
@@ -283,6 +309,7 @@ func main() {
 
 	mux.HandleFunc("POST /api/users", server.HandleCreateUser)
 
+	mux.HandleFunc("GET /api/chirps", server.HandleGetAllChirps)
 	mux.HandleFunc("POST /api/chirps", server.HandleCreateChirp)
 
 	port := ":8080"
