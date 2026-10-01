@@ -27,6 +27,7 @@ type server struct {
 	fileserverHits atomic.Int32
 	database       *database.Queries
 	platform       string
+	jwtSecret      string
 }
 
 func encodeJsonResponse(w http.ResponseWriter, statusCode int, response any) {
@@ -143,10 +144,18 @@ func (s *server) HandleCreateChirp(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	requestUserId, err := uuid.Parse(createChirpReq.UserId)
+	tokenString, err := auth.GetBearerToken(r.Header)
 	if err != nil {
-		encodeJsonResponse(w, http.StatusBadRequest, apiErrorResponse{
-			Err: "Invalid user ID. User ID must be valid UUID",
+		encodeJsonResponse(w, http.StatusUnauthorized, apiErrorResponse{
+			Err: "Unauthorized",
+		})
+		return
+	}
+
+	requestUserId, err := auth.ValidateJWT(tokenString, s.jwtSecret)
+	if err != nil {
+		encodeJsonResponse(w, http.StatusUnauthorized, apiErrorResponse{
+			Err: "Unauthorized",
 		})
 		return
 	}
@@ -328,8 +337,9 @@ func (s *server) HandleGetChirp(w http.ResponseWriter, r *http.Request) {
 }
 
 type loginRequest struct {
-	Email    string `json:"email"`
-	Password string `json:"password"`
+	Email            string `json:"email"`
+	Password         string `json:"password"`
+	ExpiresInSeconds int    `json:"expires_in_seconds"`
 }
 
 type loginResponse struct {
@@ -337,6 +347,7 @@ type loginResponse struct {
 	CreatedAt string `json:"created_at"`
 	UpdatedAt string `json:"updated_at"`
 	Email     string `json:"email"`
+	Token     string `json:"token"`
 }
 
 func (r *loginRequest) Validate() error {
@@ -355,6 +366,9 @@ func (s *server) HandleLogin(w http.ResponseWriter, r *http.Request) {
 		encodeJsonResponse(w, http.StatusBadRequest, err)
 		return
 	}
+
+	loginReq.Email = strings.TrimSpace(loginReq.Email)
+	loginReq.Password = strings.TrimSpace(loginReq.Password)
 
 	if err := loginReq.Validate(); err != nil {
 		encodeJsonResponse(w, http.StatusBadRequest, err)
@@ -391,11 +405,28 @@ func (s *server) HandleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	expiresIn := time.Hour
+	if loginReq.ExpiresInSeconds > 0 {
+		expiresIn = time.Duration(loginReq.ExpiresInSeconds) * time.Second
+		if expiresIn > time.Hour {
+			expiresIn = time.Hour
+		}
+	}
+
+	token, err := auth.MakeJWT(existingUser.ID, s.jwtSecret, expiresIn)
+	if err != nil {
+		encodeJsonResponse(w, http.StatusInternalServerError, apiErrorResponse{
+			Err: "Failed to create token",
+		})
+		return
+	}
+
 	encodeJsonResponse(w, http.StatusOK, loginResponse{
 		Id:        existingUser.ID.String(),
 		CreatedAt: existingUser.CreatedAt.Format(time.RFC3339),
 		UpdatedAt: existingUser.UpdatedAt.Format(time.RFC3339),
 		Email:     existingUser.Email,
+		Token:     token,
 	})
 }
 
@@ -408,6 +439,10 @@ func main() {
 
 	dbURL := os.Getenv("DB_URL")
 	platform := os.Getenv("PLATFORM")
+	jwtSecret := os.Getenv("JWT_SECRET_KEY")
+	if jwtSecret == "" {
+		log.Fatalf("JWT_SECRET_KEY is not set")
+	}
 
 	db, err := sql.Open("postgres", dbURL)
 	if err != nil {
@@ -417,8 +452,9 @@ func main() {
 
 	mux := http.NewServeMux()
 	server := &server{
-		database: database.New(db),
-		platform: platform,
+		database:  database.New(db),
+		platform:  platform,
+		jwtSecret: jwtSecret,
 	}
 
 	appRoot := "/app/"

@@ -7,3 +7,6 @@ bin/
 
 # Environtment Variable
 /*.env*
+
+# Assignment
+/tasks
