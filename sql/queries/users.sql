@@ -30,6 +30,14 @@ SELECT id,
 FROM users
 WHERE email = $1;
 
+-- name: UpdateUser :one
+UPDATE users
+SET email = $2,
+    hashed_password = $3,
+    updated_at = NOW()
+WHERE id = $1
+RETURNING id, created_at, updated_at, email, hashed_password;
+
 -- name: CreateRefreshToken :one
 INSERT INTO refresh_tokens (token, created_at, updated_at, user_id, expires_at, revoked_at)
 VALUES ($1, 

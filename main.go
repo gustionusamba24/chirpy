@@ -277,6 +277,63 @@ func (s *server) HandleCreateUser(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (s *server) HandleUpdateUser(w http.ResponseWriter, r *http.Request) {
+	tokenString, err := auth.GetBearerToken(r.Header)
+	if err != nil {
+		encodeJsonResponse(w, http.StatusUnauthorized, apiErrorResponse{Err: "Unauthorized"})
+		return
+	}
+
+	userID, err := auth.ValidateJWT(tokenString, s.jwtSecret)
+	if err != nil {
+		encodeJsonResponse(w, http.StatusUnauthorized, apiErrorResponse{Err: "Unauthorized"})
+		return
+	}
+
+	updateUserReq, err := decodeJsonRequest[createUserRequest](w, r)
+	if err != nil {
+		encodeJsonResponse(w, http.StatusBadRequest, err)
+		return
+	}
+
+	trimmedEmail := strings.TrimSpace(updateUserReq.Email)
+	trimmedPassword := strings.TrimSpace(updateUserReq.Password)
+	if trimmedEmail == "" || trimmedPassword == "" {
+		encodeJsonResponse(w, http.StatusBadRequest, apiErrorResponse{
+			Err: "Email and password are required",
+		})
+		return
+	}
+
+	hashedPassword, err := auth.HashPassword(trimmedPassword)
+	if err != nil {
+		encodeJsonResponse(w, http.StatusInternalServerError, apiErrorResponse{Err: "Failed to hash password"})
+		return
+	}
+
+	user, err := s.database.UpdateUser(r.Context(), database.UpdateUserParams{
+		ID:             userID,
+		Email:          trimmedEmail,
+		HashedPassword: hashedPassword,
+	})
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			encodeJsonResponse(w, http.StatusNotFound, apiErrorResponse{Err: "User not found"})
+			return
+		}
+
+		encodeJsonResponse(w, http.StatusInternalServerError, apiErrorResponse{Err: "Failed to update user"})
+		return
+	}
+
+	encodeJsonResponse(w, http.StatusOK, createUserResponse{
+		Id:        user.ID.String(),
+		CreatedAt: user.CreatedAt.Format(time.RFC3339),
+		UpdatedAt: user.UpdatedAt.Format(time.RFC3339),
+		Email:     user.Email,
+	})
+}
+
 func (s *server) HandleGetAllChirps(w http.ResponseWriter, r *http.Request) {
 	chirps, err := s.database.GetAllChirps(r.Context())
 	if err != nil {
@@ -519,6 +576,7 @@ func main() {
 	mux.HandleFunc("POST /api/refresh", server.HandleRefresh)
 	mux.HandleFunc("POST /api/revoke", server.HandleRevoke)
 	mux.HandleFunc("POST /api/users", server.HandleCreateUser)
+	mux.HandleFunc("PUT /api/users", server.HandleUpdateUser)
 
 	mux.HandleFunc("GET /api/chirps", server.HandleGetAllChirps)
 	mux.HandleFunc("GET /api/chirps/{id}", server.HandleGetChirp)
