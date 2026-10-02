@@ -337,17 +337,17 @@ func (s *server) HandleGetChirp(w http.ResponseWriter, r *http.Request) {
 }
 
 type loginRequest struct {
-	Email            string `json:"email"`
-	Password         string `json:"password"`
-	ExpiresInSeconds int    `json:"expires_in_seconds"`
+	Email    string `json:"email"`
+	Password string `json:"password"`
 }
 
 type loginResponse struct {
-	Id        string `json:"id"`
-	CreatedAt string `json:"created_at"`
-	UpdatedAt string `json:"updated_at"`
-	Email     string `json:"email"`
-	Token     string `json:"token"`
+	Id           string `json:"id"`
+	CreatedAt    string `json:"created_at"`
+	UpdatedAt    string `json:"updated_at"`
+	Email        string `json:"email"`
+	Token        string `json:"token"`
+	RefreshToken string `json:"refresh_token"`
 }
 
 func (r *loginRequest) Validate() error {
@@ -405,15 +405,7 @@ func (s *server) HandleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	expiresIn := time.Hour
-	if loginReq.ExpiresInSeconds > 0 {
-		expiresIn = time.Duration(loginReq.ExpiresInSeconds) * time.Second
-		if expiresIn > time.Hour {
-			expiresIn = time.Hour
-		}
-	}
-
-	token, err := auth.MakeJWT(existingUser.ID, s.jwtSecret, expiresIn)
+	token, err := auth.MakeJWT(existingUser.ID, s.jwtSecret, time.Hour)
 	if err != nil {
 		encodeJsonResponse(w, http.StatusInternalServerError, apiErrorResponse{
 			Err: "Failed to create token",
@@ -421,13 +413,71 @@ func (s *server) HandleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	encodeJsonResponse(w, http.StatusOK, loginResponse{
-		Id:        existingUser.ID.String(),
-		CreatedAt: existingUser.CreatedAt.Format(time.RFC3339),
-		UpdatedAt: existingUser.UpdatedAt.Format(time.RFC3339),
-		Email:     existingUser.Email,
-		Token:     token,
+	refreshToken := auth.MakeRefreshToken()
+	if refreshToken == "" {
+		encodeJsonResponse(w, http.StatusInternalServerError, apiErrorResponse{Err: "Failed to create refresh token"})
+		return
+	}
+
+	_, err = s.database.CreateRefreshToken(r.Context(), database.CreateRefreshTokenParams{
+		Token:     refreshToken,
+		UserID:    existingUser.ID,
+		ExpiresAt: time.Now().UTC().Add(60 * 24 * time.Hour),
 	})
+	if err != nil {
+		encodeJsonResponse(w, http.StatusInternalServerError, apiErrorResponse{Err: "Failed to save refresh token"})
+		return
+	}
+
+	encodeJsonResponse(w, http.StatusOK, loginResponse{
+		Id:           existingUser.ID.String(),
+		CreatedAt:    existingUser.CreatedAt.Format(time.RFC3339),
+		UpdatedAt:    existingUser.UpdatedAt.Format(time.RFC3339),
+		Email:        existingUser.Email,
+		Token:        token,
+		RefreshToken: refreshToken,
+	})
+}
+
+type refreshResponse struct {
+	Token string `json:"token"`
+}
+
+func (s *server) HandleRefresh(w http.ResponseWriter, r *http.Request) {
+	refreshToken, err := auth.GetBearerToken(r.Header)
+	if err != nil {
+		encodeJsonResponse(w, http.StatusUnauthorized, apiErrorResponse{Err: "Unauthorized"})
+		return
+	}
+
+	user, err := s.database.GetUserFromRefreshToken(r.Context(), refreshToken)
+	if err != nil {
+		encodeJsonResponse(w, http.StatusUnauthorized, apiErrorResponse{Err: "Unauthorized"})
+		return
+	}
+
+	token, err := auth.MakeJWT(user.ID, s.jwtSecret, time.Hour)
+	if err != nil {
+		encodeJsonResponse(w, http.StatusInternalServerError, apiErrorResponse{Err: "Failed to create token"})
+		return
+	}
+
+	encodeJsonResponse(w, http.StatusOK, refreshResponse{Token: token})
+}
+
+func (s *server) HandleRevoke(w http.ResponseWriter, r *http.Request) {
+	refreshToken, err := auth.GetBearerToken(r.Header)
+	if err != nil {
+		encodeJsonResponse(w, http.StatusUnauthorized, apiErrorResponse{Err: "Unauthorized"})
+		return
+	}
+
+	if err := s.database.RevokeRefreshToken(r.Context(), refreshToken); err != nil {
+		encodeJsonResponse(w, http.StatusInternalServerError, apiErrorResponse{Err: "Failed to revoke refresh token"})
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func main() {
@@ -466,6 +516,8 @@ func main() {
 	mux.HandleFunc("GET /api/healthz", server.HandleHealthCheck)
 
 	mux.HandleFunc("POST /api/login", server.HandleLogin)
+	mux.HandleFunc("POST /api/refresh", server.HandleRefresh)
+	mux.HandleFunc("POST /api/revoke", server.HandleRevoke)
 	mux.HandleFunc("POST /api/users", server.HandleCreateUser)
 
 	mux.HandleFunc("GET /api/chirps", server.HandleGetAllChirps)

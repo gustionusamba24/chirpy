@@ -1,12 +1,28 @@
 package auth
 
 import (
+	"encoding/hex"
 	"net/http"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 )
+
+func TestMakeRefreshToken(t *testing.T) {
+	first := MakeRefreshToken()
+	second := MakeRefreshToken()
+
+	if len(first) != 64 || len(second) != 64 {
+		t.Fatalf("MakeRefreshToken() length = %d and %d, want 64", len(first), len(second))
+	}
+	if _, err := hex.DecodeString(first); err != nil {
+		t.Fatalf("MakeRefreshToken() returned non-hex token: %v", err)
+	}
+	if first == second {
+		t.Fatal("MakeRefreshToken() returned the same token twice")
+	}
+}
 
 func TestMakeAndValidateJWT(t *testing.T) {
 	userID := uuid.New()
