@@ -84,3 +84,28 @@ func TestGetBearerTokenRejectsMissingHeader(t *testing.T) {
 		t.Fatal("GetBearerToken() accepted a request without an Authorization header")
 	}
 }
+
+func TestGetAPIKey(t *testing.T) {
+	headers := http.Header{}
+	headers.Set("Authorization", "ApiKey test-key")
+
+	apiKey, err := GetAPIKey(headers)
+	if err != nil {
+		t.Fatalf("GetAPIKey() error = %v", err)
+	}
+
+	if apiKey != "test-key" {
+		t.Fatalf("GetAPIKey() key = %q, want %q", apiKey, "test-key")
+	}
+}
+
+func TestGetAPIKeyRejectsInvalidHeader(t *testing.T) {
+	for _, authorization := range []string{"", "Bearer test-key", "ApiKey", "ApiKey "} {
+		headers := http.Header{}
+		headers.Set("Authorization", authorization)
+
+		if _, err := GetAPIKey(headers); err == nil {
+			t.Fatalf("GetAPIKey() accepted invalid Authorization header %q", authorization)
+		}
+	}
+}

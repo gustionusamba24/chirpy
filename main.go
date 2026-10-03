@@ -28,6 +28,7 @@ type server struct {
 	database       *database.Queries
 	platform       string
 	jwtSecret      string
+	polkaKey       string
 }
 
 func encodeJsonResponse(w http.ResponseWriter, statusCode int, response any) {
@@ -345,6 +346,11 @@ type polkaWebhookRequest struct {
 }
 
 func (s *server) HandlePolkaWebhook(w http.ResponseWriter, r *http.Request) {
+	apiKey, err := auth.GetAPIKey(r.Header)
+	if err != nil || apiKey != s.polkaKey {
+		w.WriteHeader(http.StatusUnauthorized)
+		return
+	}
 
 	webhookReq, err := decodeJsonRequest[polkaWebhookRequest](w, r)
 	if err != nil {
@@ -636,8 +642,12 @@ func main() {
 	dbURL := os.Getenv("DB_URL")
 	platform := os.Getenv("PLATFORM")
 	jwtSecret := os.Getenv("JWT_SECRET_KEY")
+	polkaKey := os.Getenv("POLKA_KEY")
 	if jwtSecret == "" {
 		log.Fatalf("JWT_SECRET_KEY is not set")
+	}
+	if polkaKey == "" {
+		log.Fatalf("POLKA_KEY is not set")
 	}
 
 	db, err := sql.Open("postgres", dbURL)
@@ -651,6 +661,7 @@ func main() {
 		database:  database.New(db),
 		platform:  platform,
 		jwtSecret: jwtSecret,
+		polkaKey:  polkaKey,
 	}
 
 	appRoot := "/app/"

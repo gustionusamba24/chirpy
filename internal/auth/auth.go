@@ -35,6 +35,20 @@ func GetBearerToken(headers http.Header) (string, error) {
 	return parts[1], nil
 }
 
+func GetAPIKey(headers http.Header) (string, error) {
+	authorizationHeader := headers.Get("Authorization")
+	if authorizationHeader == "" {
+		return "", errors.New("authorization header is required")
+	}
+
+	parts := strings.Fields(authorizationHeader)
+	if len(parts) != 2 || !strings.EqualFold(parts[0], "ApiKey") || strings.TrimSpace(parts[1]) == "" {
+		return "", errors.New("authorization header must be in the format 'ApiKey THE_KEY_HERE'")
+	}
+
+	return parts[1], nil
+}
+
 func MakeJWT(userID uuid.UUID, tokenSecret string, expiresIn time.Duration) (string, error) {
 	now := time.Now().UTC()
 	claims := jwt.RegisteredClaims{
