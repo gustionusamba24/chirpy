@@ -7,7 +7,7 @@ VALUES (
     $1,
     $2
 )
-RETURNING *;
+RETURNING id, created_at, updated_at, email, hashed_password, is_chirpy_red;
 
 -- name: DeleteAllUsers :exec
 DELETE FROM users;
@@ -17,7 +17,8 @@ SELECT id,
        created_at,
        updated_at,
        email,
-       hashed_password
+       hashed_password,
+       is_chirpy_red
 FROM users
 WHERE id = $1;
 
@@ -26,7 +27,8 @@ SELECT id,
        created_at,
        updated_at,
        email,
-       hashed_password
+       hashed_password,
+       is_chirpy_red
 FROM users
 WHERE email = $1;
 
@@ -36,7 +38,14 @@ SET email = $2,
     hashed_password = $3,
     updated_at = NOW()
 WHERE id = $1
-RETURNING id, created_at, updated_at, email, hashed_password;
+RETURNING id, created_at, updated_at, email, hashed_password, is_chirpy_red;
+
+-- name: UpgradeUserToChirpyRed :one
+UPDATE users
+SET is_chirpy_red = TRUE,
+    updated_at = NOW()
+WHERE id = $1
+RETURNING id, created_at, updated_at, email, hashed_password, is_chirpy_red;
 
 -- name: CreateRefreshToken :one
 INSERT INTO refresh_tokens (token, created_at, updated_at, user_id, expires_at, revoked_at)
@@ -54,7 +63,8 @@ SELECT users.id,
        users.created_at,
        users.updated_at,
        users.email,
-       users.hashed_password
+       users.hashed_password,
+       users.is_chirpy_red
 FROM users
 JOIN refresh_tokens ON refresh_tokens.user_id = users.id
 WHERE refresh_tokens.token = $1
