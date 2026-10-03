@@ -393,6 +393,50 @@ func (s *server) HandleGetChirp(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (s *server) HandleDeleteChirp(w http.ResponseWriter, r *http.Request) {
+	tokenString, err := auth.GetBearerToken(r.Header)
+	if err != nil {
+		encodeJsonResponse(w, http.StatusUnauthorized, apiErrorResponse{Err: "Unauthorized"})
+		return
+	}
+
+	requestUserID, err := auth.ValidateJWT(tokenString, s.jwtSecret)
+	if err != nil {
+		encodeJsonResponse(w, http.StatusUnauthorized, apiErrorResponse{Err: "Unauthorized"})
+		return
+	}
+
+	chirpIDString := r.PathValue("id")
+	chirpID, err := uuid.Parse(chirpIDString)
+	if err != nil {
+		encodeJsonResponse(w, http.StatusBadRequest, apiErrorResponse{Err: "Invalid chirp ID. Chirp ID must be valid UUID"})
+		return
+	}
+
+	chirp, err := s.database.GetChirpByID(r.Context(), chirpID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			encodeJsonResponse(w, http.StatusNotFound, apiErrorResponse{Err: "No chirp found with the provided ID"})
+			return
+		}
+
+		encodeJsonResponse(w, http.StatusInternalServerError, apiErrorResponse{Err: "Failed to retrieve chirp"})
+		return
+	}
+
+	if chirp.UserID != requestUserID {
+		encodeJsonResponse(w, http.StatusForbidden, apiErrorResponse{Err: "Forbidden"})
+		return
+	}
+
+	if err := s.database.DeleteChirp(r.Context(), database.DeleteChirpParams{ID: chirpID, UserID: requestUserID}); err != nil {
+		encodeJsonResponse(w, http.StatusInternalServerError, apiErrorResponse{Err: "Failed to delete chirp"})
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
 type loginRequest struct {
 	Email    string `json:"email"`
 	Password string `json:"password"`
@@ -581,6 +625,7 @@ func main() {
 	mux.HandleFunc("GET /api/chirps", server.HandleGetAllChirps)
 	mux.HandleFunc("GET /api/chirps/{id}", server.HandleGetChirp)
 	mux.HandleFunc("POST /api/chirps", server.HandleCreateChirp)
+	mux.HandleFunc("DELETE /api/chirps/{id}", server.HandleDeleteChirp)
 
 	port := ":8080"
 
